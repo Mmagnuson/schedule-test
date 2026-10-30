@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Crane Schedule</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --panel: #ffffff; --border: #c9ced6; --grid: #dcdfe4; --day: #4b5160;
+    --text: #1d2129; --muted: #6b7280; --head: #eef0f3; --job: #7f7f7f;
+    --accent: #e8702a; --bad: #d62828;
+    --W: 23px; --H: 23px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font: 13px/1.3 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    background: var(--bg); color: var(--text);
+  }
+  header {
+    display: flex; align-items: center; gap: 8px; padding: 12px 16px; flex-wrap: wrap;
+    border-bottom: 1px solid var(--border); background: var(--panel);
+  }
+  header h1 { font-size: 16px; margin: 0 6px 0 0; font-weight: 600; }
+  header .spacer { flex: 1; }
+  .range { font-weight: 600; min-width: 190px; text-align: center; }
+  button {
+    background: var(--accent); color: #fff; border: 0; border-radius: 6px;
+    padding: 7px 12px; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button.secondary { background: #e3e6eb; color: var(--text); }
+  button:disabled { opacity: .5; cursor: default; }
+  main { padding: 14px 16px; }
+  .hint { color: var(--muted); margin: 0 0 10px; }
+
+  /* ---- gantt ---- */
+  .gantt {
+    background: var(--panel); border: 1px solid var(--border);
+    overflow-x: hidden; overflow-y: auto; height: 80vh;
+    position: relative; user-select: none;
+  }
+  .row { display: flex; }
+  .left {
+    flex: none; display: grid;
+    grid-template-columns: var(--c1, 120px) var(--c2, 96px) var(--c3, 86px) var(--c4, 130px);
+    background: var(--panel); border-right: 2px solid var(--day);
+  }
+  .left > div {
+    height: var(--H); display: flex; align-items: center; gap: 5px; padding: 0 6px;
+    border-bottom: 1px solid var(--grid); border-right: 1px solid var(--grid);
+    overflow: hidden; white-space: nowrap;
+  }
+  .left input {
+    border: 0; background: transparent; font: inherit; color: inherit; width: 100%;
+    padding: 2px 0; outline: none; min-width: 0;
+  }
+  .left input:focus { background: #fff6e8; }
+  .jobrow .left > div { font-weight: 600; }
+  .row.first .left > div, .row.first .tl { border-top: 1px solid var(--day); }
+  .dropcell { color: var(--muted); font-style: italic; font-weight: 400 !important; }
+  .x {
+    background: none; color: var(--muted); padding: 0 4px; font-size: 15px; line-height: 1;
+    border-radius: 4px; visibility: hidden; flex: none;
+  }
+  .x:hover { color: var(--bad); background: #fde8e8; }
+  .row:hover .x { visibility: visible; }
+  .cname span:not(.sw) { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  .sw { flex: none; width: 12px; height: 12px; border-radius: 3px; border: 1px solid rgba(0,0,0,.25); }
+
+  .tl {
+    position: relative; overflow: hidden; height: var(--H); width: var(--tlw, 600px); flex: none;
+    border-bottom: 1px solid var(--grid); cursor: grab;
+    background-image:
+      linear-gradient(to right, var(--day) 1px, transparent 1px),
+      linear-gradient(to right, var(--grid) 1px, transparent 1px);
+    background-size: calc(var(--W) * 4) 100%, var(--W) 100%;
+    background-position: var(--bx, 0) 0, var(--bx, 0) 0;
+  }
+  .panning, .panning .tl, .panning .bar { cursor: grabbing !important; }
+  .wk { position: absolute; top: 0; bottom: 0; background: rgba(0,0,0,.055); pointer-events: none; }
+
+  .head { position: sticky; top: 0; z-index: 5; }
+  .head .left { background: var(--head); }
+  .head .left > div {
+    height: calc(var(--H) * 3); align-items: flex-end; padding-bottom: 6px;
+    font-weight: 600; border-bottom: 1px solid var(--day);
+  }
+  .head .left > div { position: relative; }
+  .cr {
+    position: absolute; top: 0; right: 0; bottom: 0; width: 7px; cursor: col-resize; touch-action: none;
+  }
+  .cr:hover, .resizing .cr.active { background: var(--accent); opacity: .5; }
+  .resizing, .resizing * { cursor: col-resize !important; }
+  .head .tl { height: calc(var(--H) * 3); background: var(--head); border-bottom: 1px solid var(--day); }
+  .hc {
+    position: absolute; height: var(--H); line-height: var(--H); text-align: center;
+    border-right: 1px solid var(--grid); border-bottom: 1px solid var(--grid); background: var(--head);
+  }
+  .hc.we { background: #e2e5ea; }
+  .hc.d { font-weight: 600; border-right-color: var(--day); }
+  .hc.h { font-size: 11px; color: var(--muted); border-bottom: 0; }
+  .hc.h.last { border-right-color: var(--day); }
+
+  .bar {
+    position: absolute; top: 0; bottom: 0; z-index: 1; touch-action: none; cursor: grab;
+    background-image: linear-gradient(to right, rgba(255,255,255,.35) 1px, transparent 1px);
+    /* bars always start on a slot edge, so their divider lines start at the bar's own left edge */
+    background-size: var(--W) 100%; background-position: 0 0;
+  }
+  .bar::before, .bar::after {
+    content: ""; position: absolute; top: 0; bottom: 0; width: var(--W);
+    background: rgba(0,0,0,.2); cursor: ew-resize;
+  }
+  .bar::before { left: 0; }
+  .bar::after { right: 0; }
+  .bar.job { background-color: var(--job); }
+  .bar.conflict { outline: 2px dashed #000; outline-offset: -2px; }
+  .bar.dragging { cursor: grabbing; box-shadow: 0 2px 8px rgba(0,0,0,.25); z-index: 2; }
+
+  .row.over .left > div, .row.over .tl { background-color: rgba(232,112,42,.13); }
+  .row.flash .left > div, .row.flash .tl { background-color: rgba(46,158,91,.18); }
+
+  #tip {
+    position: fixed; z-index: 10; pointer-events: none; display: none;
+    background: #1d2129; color: #fff; padding: 4px 8px; border-radius: 5px; font-size: 12px; white-space: nowrap;
+  }
+  .ctx {
+    position: fixed; z-index: 20; display: none; min-width: 170px; padding: 4px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 7px;
+    box-shadow: 0 6px 18px rgba(0,0,0,.18);
+  }
+  .ctx .ctx-head { padding: 5px 9px; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--grid); margin-bottom: 3px; }
+  .ctx button {
+    display: block; width: 100%; text-align: left; background: none; color: var(--text);
+    font-weight: 400; padding: 6px 9px; border-radius: 5px;
+  }
+  .ctx button:hover { background: #fde8e8; color: var(--bad); }
+  #log { margin-top: 10px; font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; color: var(--muted); white-space: pre-wrap; max-height: 90px; overflow: auto; }
+
+  /* ---- palette styles (used in the pop-out window too) ---- */
+  .palette { padding: 12px; }
+  .palette h2 { font-size: 12px; margin: 0 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .palette .group { margin-bottom: 14px; }
+  .chip {
+    display: flex; align-items: center; gap: 9px;
+    padding: 8px 11px; margin-bottom: 5px; border-radius: 7px;
+    background: var(--panel); border: 1px solid var(--border); cursor: grab; user-select: none;
+  }
+  .chip .sw { width: 16px; height: 16px; }
+  .chip:active { cursor: grabbing; }
+  .chip:hover { border-color: var(--accent); }
+  .chip .val { font-weight: 600; }
+  .palette .note { color: var(--muted); font-size: 12px; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Crane Schedule</h1>
+  <button id="prev" class="secondary" title="Back one week">◀</button>
+  <button id="today" class="secondary">Today</button>
+  <button id="next" class="secondary" title="Forward one week">▶</button>
+  <span class="range" id="range"></span>
+  <button id="addJob" class="secondary">+ Add ship job</button>
+  <button id="reset" class="secondary">Reset demo</button>
+  <span class="spacer"></span>
+  <button id="openPip" title="Chromeless window that stays on top of other windows (Chrome/Edge)">Open cranes (always on top)</button>
+  <button id="openWin" class="secondary" title="Normal pop-up window, cannot stay on top">Open cranes (window)</button>
+</header>
+
+<main>
+  <p class="hint">
+    Drag empty squares left or right (or shift + mouse wheel) to move through time. Drag a crane from the pop-out onto a ship job.
+    Drag a bar's first or last box to change its start or end, or drag the middle to move it. Double-click an empty ship row to give it a window.
+  </p>
+  <div class="gantt" id="gantt"></div>
+  <div id="log"></div>
+</main>
+<div id="tip"></div>
+<div class="ctx" id="ctx"><div class="ctx-head" id="ctxHead"></div><button id="ctxRemove"></button></div>
+
+<script>
+const MIME = 'application/x-demo-item';
+const STORE_KEY = 'crane-gantt-v2';
+
+/* ---------- cranes: one color each ---------- */
+const CRANE_TYPES = [
+  { type: 'Liebherr CBG 500 E', cranes: [['D. Lopez', '#1f77b4'], ['Bill S.', '#17becf']] },
+  { type: 'Gottwald G HPK 8400 B', cranes: [['Ann T.', '#7b3294'], ['J. Ryan', '#d62728'], ['Yvonne S.', '#e377c2'],
+      ['T. May', '#8c564b'], ['Talley-Perez', '#bcbd22'], ['Randy W', '#f2c12e']] },
+  { type: 'Gottwald G HPK 6400 B', cranes: [['F. Walker', '#2ca02c'], ['K. Robertson', '#b8e186'], ['T. Lange', '#006d5b'],
+      ['Attitude', '#9467bd'], ['Ability', '#c5b0d5']] },
+  { type: 'Gottwald G HPK 330', cranes: [['Glenn S.', '#3b4cc0'], ['Don D.', '#ff9896'], ['Alex G.', '#e8702a'], ['Miss Irene', '#66c2a5']] },
+];
+const CRANE_COLOR = {};
+CRANE_TYPES.forEach(t => t.cranes.forEach(([n, c]) => { CRANE_COLOR[n] = c; }));
+const colorOf = name => CRANE_COLOR[name] || '#e8702a';
+
+/* ---------- time: slots are 6 hours, slot 0 = Mon 11/02/2026 00:00, can go negative ---------- */
+const W = 23, DAY_W = W * 4;
+const EPOCH = new Date(2026, 10, 2);
+const DOW = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
+const MIN_ROWS = 8;
+document.documentElement.style.setProperty('--W', W + 'px');
+
+const pad = n => String(n).padStart(2, '0');
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const dayDate = i => { const d = new Date(EPOCH); d.setDate(d.getDate() + i); return d; };
+const dayIndex = d => Math.round((Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) -
+  Date.UTC(EPOCH.getFullYear(), EPOCH.getMonth(), EPOCH.getDate())) / 864e5);
+const slotLabel = s => { const d = dayDate(Math.floor(s / 4)); return `${DOW[d.getDay()]} ${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad((((s % 4) + 4) % 4) * 6)}`; };
+// end slot is inclusive, so the range ends at the start of the next slot
+const rangeLabel = (a, b) => `${slotLabel(a)} → ${slotLabel(b + 1)} · ${(b - a + 1) * 6}h`;
+const overlaps = (a, b, c, d) => a <= d && c <= b;
+
+const logEl = document.getElementById('log');
+const log = m => { logEl.textContent = `${new Date().toLocaleTimeString()}  ${m}\n` + logEl.textContent; };
+
+/* ---------- data ---------- */
+let seq = 0;
+const nid = () => Date.now().toString(36) + (seq++);
+
+function seed() {
+  return [
+    { id: nid(), ship: 'Ship Job 1', location: '158', material: 'Urea', start: 3, end: 19,
+      cranes: [{ id: nid(), name: 'Alex G.', type: 'Gottwald G HPK 330', start: 4, end: 19 }] },
+    { id: nid(), ship: 'Ship Job 2', location: '158 Lower', material: 'Coal', start: null, end: null, cranes: [] },
+  ];
+}
+const DEFAULT_COLS = [120, 96, 86, 130];  // Ship, Location, Material, Crane widths in px
+const MIN_COL = 50;
+let jobs, origin, cols; // origin = pixels from slot 0 to the left edge of the timeline
+try {
+  const saved = JSON.parse(localStorage.getItem(STORE_KEY));
+  jobs = saved.jobs; origin = saved.origin; cols = saved.cols;
+} catch {}
+if (!Array.isArray(jobs)) { jobs = seed(); origin = 0; }
+if (typeof origin !== 'number') origin = 0;
+if (!Array.isArray(cols) || cols.length !== 4) cols = [...DEFAULT_COLS];
+function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify({ jobs, origin, cols })); } catch {} }
+
+const findJob = id => jobs.find(j => j.id === id);
+
+// full extent of a job: its own window plus all its cranes
+function jobExtent(job) {
+  let s = job.start, e = job.end;
+  for (const c of job.cranes) {
+    s = s == null ? c.start : Math.min(s, c.start);
+    e = e == null ? c.end : Math.max(e, c.end);
+  }
+  return s == null ? null : [s, e];
+}
+
+// same crane booked on overlapping time anywhere -> flag both bars
+function findConflicts() {
+  const all = [];
+  jobs.forEach(j => j.cranes.forEach(c => all.push({ c, j })));
+  const bad = new Map();
+  for (let i = 0; i < all.length; i++) for (let k = i + 1; k < all.length; k++) {
+    const a = all[i], b = all[k];
+    if (a.c.name === b.c.name && overlaps(a.c.start, a.c.end, b.c.start, b.c.end)) {
+      bad.set(a.c.id, b.j.ship); bad.set(b.c.id, a.j.ship);
+    }
+  }
+  return bad;
+}
+
+/* ---------- view ---------- */
+const gantt = document.getElementById('gantt');
+const rangeEl = document.getElementById('range');
+let tlW = 600;
+
+function applyCols() { cols.forEach((w, i) => gantt.style.setProperty(`--c${i + 1}`, w + 'px')); }
+applyCols();
+
+function measure() {
+  const left = gantt.querySelector('.head .left');
+  tlW = Math.max(W * 4, gantt.clientWidth - (left ? left.offsetWidth : 434));
+  gantt.style.setProperty('--tlw', tlW + 'px');
+}
+const viewSlots = () => [Math.floor(origin / W), Math.ceil((origin + tlW) / W) - 1];
+
+// rows that belong in the current time window (jobs with no dates always show)
+function visibleRows() {
+  const [vs, ve] = viewSlots(), out = [];
+  for (const job of jobs) {
+    const ext = jobExtent(job);
+    if (ext && !overlaps(ext[0], ext[1], vs, ve)) continue;
+    out.push({ job });
+    for (const c of job.cranes) if (overlaps(c.start, c.end, vs, ve)) out.push({ job, c });
+  }
+  return out;
+}
+const rowsKey = rows => rows.map(r => (r.c || r.job).id).join(',');
+let lastKey = '';
+
+/* render() rebuilds the rows; paint() only redraws what's inside the timeline */
+function render() {
+  measure();
+  const rows = visibleRows();
+  lastKey = rowsKey(rows);
+  const heads = ['Ship', 'Location', 'Material', 'Crane']
+    .map((t, i) => `<div>${t}<span class="cr" data-col="${i}" title="Drag to resize"></span></div>`).join('');
+  let html = `<div class="row head"><div class="left">${heads}</div><div class="tl"></div></div>`;
+  for (const { job, c } of rows) {
+    if (!c) {
+      html += `<div class="row jobrow first" data-job="${job.id}">
+        <div class="left">
+          <div><input data-f="ship" value="${esc(job.ship)}" placeholder="Ship"><button class="x" data-del-job="${job.id}" title="Remove ship job">×</button></div>
+          <div><input data-f="location" value="${esc(job.location)}" placeholder="Location"></div>
+          <div><input data-f="material" value="${esc(job.material)}" placeholder="Material"></div>
+          <div class="dropcell">${job.cranes.length ? '' : 'drop crane here'}</div>
+        </div><div class="tl"></div></div>`;
+    } else {
+      html += `<div class="row cranerow" data-job="${job.id}" data-crane="${c.id}">
+        <div class="left"><div></div><div></div><div></div>
+          <div class="cname" title="${esc(c.type)}"><span class="sw" style="background:${colorOf(c.name)}"></span><span>${esc(c.name)}</span><button class="x" data-del-crane="${c.id}" title="Remove crane">×</button></div>
+        </div><div class="tl"></div></div>`;
+    }
+  }
+  // pad with empty rows so the grid fills the box
+  const fill = Math.max(MIN_ROWS, Math.ceil(gantt.clientHeight / W) - 3);
+  for (let n = rows.length; n < fill; n++) {
+    html += `<div class="row filler"><div class="left"><div></div><div></div><div></div><div></div></div><div class="tl"></div></div>`;
+  }
+  gantt.innerHTML = html;
+  // drop extra empty rows so there's no scrollbar until real rows need one
+  let last;
+  while (gantt.scrollHeight > gantt.clientHeight && (last = gantt.querySelector('.row.filler:last-child'))) last.remove();
+  paint();
+}
+
+function paint() {
+  gantt.style.setProperty('--bx', -origin + 'px');
+  const d0 = Math.floor(origin / DAY_W), d1 = Math.floor((origin + tlW) / DAY_W);
+  let head = '', wk = '';
+  for (let i = d0; i <= d1; i++) {
+    const x = i * DAY_W - origin, dt = dayDate(i), we = (dt.getDay() === 0 || dt.getDay() === 6) ? ' we' : '';
+    head += `<div class="hc d${we}" style="left:${x}px;top:0;width:${DAY_W}px">${DOW[dt.getDay()]}</div>`;
+    head += `<div class="hc d${we}" style="left:${x}px;top:var(--H);width:${DAY_W}px">${pad(dt.getMonth() + 1)}/${pad(dt.getDate())}</div>`;
+    for (let k = 0; k < 4; k++) {
+      head += `<div class="hc h${we}${k === 3 ? ' last' : ''}" style="left:${x + k * W}px;top:calc(var(--H) * 2);width:${W}px">${pad(k * 6)}</div>`;
+    }
+    if (we) wk += `<div class="wk" style="left:${x}px;width:${DAY_W}px"></div>`;
+  }
+  gantt.querySelector('.head .tl').innerHTML = head;
+
+  const bad = findConflicts();
+  gantt.querySelectorAll('.row:not(.head)').forEach(row => {
+    let bar = '';
+    const job = row.dataset.job && findJob(row.dataset.job);
+    if (job && row.dataset.crane) {
+      const c = job.cranes.find(c => c.id === row.dataset.crane), conflict = bad.get(c.id);
+      const title = `${c.name} (${c.type}): ${rangeLabel(c.start, c.end)}` + (conflict ? `\nAlso booked on ${conflict} at the same time` : '');
+      bar = barHtml(c.start, c.end, `crane${conflict ? ' conflict' : ''}`, title, colorOf(c.name));
+    } else if (job && job.start != null) {
+      bar = barHtml(job.start, job.end, 'job', `${job.ship}: ${rangeLabel(job.start, job.end)}`);
+    }
+    row.querySelector('.tl').innerHTML = wk + bar;
+  });
+
+  const a = dayDate(Math.floor(origin / DAY_W)), b = dayDate(Math.floor((origin + tlW - 1) / DAY_W));
+  const f = d => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  rangeEl.textContent = `${f(a)} – ${f(b)}, ${b.getFullYear()}`;
+}
+
+function barHtml(s, e, cls, title, color) {
+  return `<div class="bar ${cls}" style="left:${s * W - origin}px;width:${(e - s + 1) * W}px;${color ? `background-color:${color}` : ''}" title="${esc(title)}"></div>`;
+}
+
+// after the view moves: rebuild rows only if jobs came into or left view
+function refresh() {
+  if (rowsKey(visibleRows()) !== lastKey) render(); else paint();
+}
+function panTo(px) { origin = px; refresh(); save(); }
+
+function flashJob(id) {
+  gantt.querySelectorAll(`.row[data-job="${id}"]`).forEach(r => {
+    r.classList.add('flash'); setTimeout(() => r.classList.remove('flash'), 500);
+  });
+}
+
+/* ---------- toolbar ---------- */
+document.getElementById('prev').addEventListener('click', () => panTo(origin - 7 * DAY_W));
+document.getElementById('next').addEventListener('click', () => panTo(origin + 7 * DAY_W));
+document.getElementById('today').addEventListener('click', () => panTo(dayIndex(new Date()) * DAY_W));
+document.getElementById('addJob').addEventListener('click', () => {
+  const job = { id: nid(), ship: `Ship Job ${jobs.length + 1}`, location: '', material: '', start: null, end: null, cranes: [] };
+  jobs.push(job); save(); render();
+  gantt.querySelector(`.row[data-job="${job.id}"] input`).select();
+});
+document.getElementById('reset').addEventListener('click', () => {
+  if (!confirm('Reset the schedule to the demo data?')) return;
+  jobs = seed(); origin = 0; save(); render(); log('reset');
+});
+window.addEventListener('resize', () => { render(); });
+
+/* ---------- editing ship fields / removing ---------- */
+gantt.addEventListener('input', e => {
+  const f = e.target.dataset.f; if (!f) return;
+  findJob(e.target.closest('.row').dataset.job)[f] = e.target.value; save();
+});
+gantt.addEventListener('click', e => {
+  const dc = e.target.closest('[data-del-crane]');
+  if (dc) {
+    const job = findJob(dc.closest('.row').dataset.job);
+    const c = job.cranes.find(c => c.id === dc.dataset.delCrane);
+    job.cranes = job.cranes.filter(x => x !== c);
+    save(); render(); log(`removed ${c.name} from ${job.ship}`);
+    return;
+  }
+  const dj = e.target.closest('[data-del-job]');
+  if (dj) {
+    const job = findJob(dj.dataset.delJob);
+    if (!confirm(`Remove ${job.ship} and its cranes?`)) return;
+    jobs = jobs.filter(j => j !== job); save(); render(); log(`removed ${job.ship}`);
+  }
+});
+
+/* ---------- resize the left columns by dragging the header dividers ---------- */
+let colDrag = null;
+gantt.addEventListener('pointerdown', e => {
+  const h = e.target.closest('.cr');
+  if (!h || e.button !== 0) return;
+  e.preventDefault();
+  colDrag = { i: +h.dataset.col, x0: e.clientX, w0: cols[+h.dataset.col], h };
+  h.setPointerCapture(e.pointerId);
+  h.classList.add('active');
+  document.body.classList.add('resizing');
+});
+gantt.addEventListener('pointermove', e => {
+  if (!colDrag) return;
+  cols[colDrag.i] = Math.max(MIN_COL, Math.round(colDrag.w0 + e.clientX - colDrag.x0));
+  applyCols(); measure(); paint(); // repaint only, so the handle being dragged isn't rebuilt
+});
+function endColDrag() {
+  if (!colDrag) return;
+  colDrag.h.classList.remove('active');
+  document.body.classList.remove('resizing');
+  colDrag = null; refresh(); save();
+}
+gantt.addEventListener('pointerup', endColDrag);
+gantt.addEventListener('pointercancel', endColDrag);
+// double-click a divider to put that column back to its default width
+gantt.addEventListener('dblclick', e => {
+  const h = e.target.closest('.cr'); if (!h) return;
+  cols[+h.dataset.col] = DEFAULT_COLS[+h.dataset.col];
+  applyCols(); measure(); refresh(); save();
+});
+
+/* ---------- right-click a crane bar: remove it from the ship ---------- */
+const ctx = document.getElementById('ctx');
+let ctxTarget = null;
+function hideCtx() { ctx.style.display = 'none'; ctxTarget = null; }
+
+gantt.addEventListener('contextmenu', e => {
+  const bar = e.target.closest('.bar.crane');
+  if (!bar) { hideCtx(); return; }
+  e.preventDefault();
+  const row = bar.closest('.row');
+  const job = findJob(row.dataset.job);
+  const c = job.cranes.find(c => c.id === row.dataset.crane);
+  ctxTarget = { job, c };
+  document.getElementById('ctxHead').textContent = `${c.name} · ${job.ship}`;
+  document.getElementById('ctxRemove').textContent = `Remove from ${job.ship}`;
+  ctx.style.display = 'block';
+  // keep the menu on screen
+  const x = Math.min(e.clientX, window.innerWidth - ctx.offsetWidth - 6);
+  const y = Math.min(e.clientY, window.innerHeight - ctx.offsetHeight - 6);
+  ctx.style.left = x + 'px'; ctx.style.top = y + 'px';
+});
+document.getElementById('ctxRemove').addEventListener('click', () => {
+  if (!ctxTarget) return;
+  const { job, c } = ctxTarget;
+  job.cranes = job.cranes.filter(x => x !== c);
+  hideCtx(); save(); render();
+  log(`removed ${c.name} from ${job.ship}`);
+});
+document.addEventListener('pointerdown', e => { if (!ctx.contains(e.target)) hideCtx(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') hideCtx(); });
+window.addEventListener('blur', hideCtx);
+gantt.addEventListener('scroll', hideCtx);
+
+/* ---------- pointer: bars (first box = start, last box = end, middle = move), empty squares = pan ---------- */
+const tip = document.getElementById('tip');
+let drag = null, pan = null;
+
+const slotAt = (tl, x) => Math.floor((x - tl.getBoundingClientRect().left + origin) / W);
+const targetOf = row => {
+  const job = findJob(row.dataset.job);
+  return row.dataset.crane ? job.cranes.find(c => c.id === row.dataset.crane) : job;
+};
+function modeAt(bar, obj, x) {
+  const off = x - bar.getBoundingClientRect().left, len = obj.end - obj.start + 1, k = Math.floor(off / W);
+  if (len === 1) return off < W / 2 ? 'start' : 'end';
+  return k <= 0 ? 'start' : k >= len - 1 ? 'end' : 'move';
+}
+function showTip(x, y, text) {
+  tip.textContent = text; tip.style.display = 'block';
+  tip.style.left = (x + 14) + 'px'; tip.style.top = (y + 16) + 'px';
+}
+
+gantt.addEventListener('pointerdown', e => {
+  if (e.button !== 0) return;
+  const tl = e.target.closest('.tl');
+  if (!tl) return;
+  const bar = e.target.closest('.bar');
+  e.preventDefault();
+  if (!bar) {
+    pan = { x0: e.clientX, o0: origin };
+    gantt.setPointerCapture(e.pointerId);
+    gantt.classList.add('panning');
+    return;
+  }
+  const obj = targetOf(bar.closest('.row'));
+  drag = { obj, bar, mode: modeAt(bar, obj, e.clientX), x0: e.clientX, s0: obj.start, e0: obj.end, s: obj.start, e: obj.end };
+  bar.setPointerCapture(e.pointerId);
+  bar.classList.add('dragging');
+  showTip(e.clientX, e.clientY, rangeLabel(obj.start, obj.end));
+});
+
+gantt.addEventListener('pointermove', e => {
+  if (pan) {
+    origin = pan.o0 - (e.clientX - pan.x0);
+    refresh();
+    return;
+  }
+  if (!drag) {
+    const bar = e.target.closest('.bar');
+    if (bar) bar.style.cursor = modeAt(bar, targetOf(bar.closest('.row')), e.clientX) === 'move' ? 'grab' : 'ew-resize';
+    return;
+  }
+  const d = Math.round((e.clientX - drag.x0) / W);
+  let s = drag.s0, en = drag.e0;
+  if (drag.mode === 'start') s = Math.min(drag.s0 + d, drag.e0);
+  else if (drag.mode === 'end') en = Math.max(drag.e0 + d, drag.s0);
+  else { s += d; en += d; }
+  drag.s = s; drag.e = en;
+  drag.bar.style.left = s * W - origin + 'px';
+  drag.bar.style.width = (en - s + 1) * W + 'px';
+  showTip(e.clientX, e.clientY, rangeLabel(s, en));
+});
+
+function endPointer() {
+  if (pan) {
+    const moved = origin !== pan.o0;
+    pan = null; gantt.classList.remove('panning');
+    if (moved) save();
+    return;
+  }
+  if (!drag) return;
+  const { obj, s, e, s0, e0 } = drag;
+  drag = null; tip.style.display = 'none';
+  obj.start = s; obj.end = e;
+  save(); render();
+  if (s !== s0 || e !== e0) log(`${obj.name || obj.ship}: ${rangeLabel(s, e)}`);
+}
+gantt.addEventListener('pointerup', endPointer);
+gantt.addEventListener('pointercancel', endPointer);
+
+// horizontal wheel / trackpad, or shift + wheel, moves through time
+gantt.addEventListener('wheel', e => {
+  const dx = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : (e.shiftKey ? e.deltaY : 0);
+  if (!dx) return;
+  e.preventDefault();
+  panTo(origin + dx);
+}, { passive: false });
+
+// double-click an empty ship row to give the ship a 1-day window there
+gantt.addEventListener('dblclick', e => {
+  const tl = e.target.closest('.tl'), row = tl?.closest('.jobrow');
+  if (!row || e.target.closest('.bar')) return;
+  const job = findJob(row.dataset.job);
+  if (job.start != null) return;
+  job.start = slotAt(tl, e.clientX); job.end = job.start + 3;
+  save(); render(); log(`${job.ship}: ${rangeLabel(job.start, job.end)}`);
+});
+
+/* ---------- dropping cranes from the pop-out ---------- */
+let overJob = null;
+function setOver(id) {
+  if (overJob === id) return;
+  gantt.querySelectorAll('.row.over').forEach(r => r.classList.remove('over'));
+  overJob = id;
+  if (id) gantt.querySelectorAll(`.row[data-job="${id}"]`).forEach(r => r.classList.add('over'));
+}
+const isCraneDrag = e => [...e.dataTransfer.types].includes(MIME);
+
+gantt.addEventListener('dragover', e => {
+  if (!isCraneDrag(e)) return;
+  const row = e.target.closest('.row[data-job]');
+  if (!row) { setOver(null); return; }
+  e.preventDefault(); e.dataTransfer.dropEffect = 'copy';
+  setOver(row.dataset.job);
+});
+gantt.addEventListener('dragleave', e => { if (!gantt.contains(e.relatedTarget)) setOver(null); });
+gantt.addEventListener('drop', e => {
+  const row = e.target.closest('.row[data-job]');
+  setOver(null);
+  if (!row) return;
+  e.preventDefault();
+  const raw = e.dataTransfer.getData(MIME); if (!raw) return;
+  const item = JSON.parse(raw);
+  if (item.kind !== 'crane') return;
+  const job = findJob(row.dataset.job);
+  const tl = e.target.closest('.tl');
+  let s, en;
+  if (tl) {                     // dropped on the timeline: start at that slot
+    s = slotAt(tl, e.clientX);
+    en = job.start != null && job.end > s ? job.end : s + 7;
+  } else if (job.start != null) { s = job.start; en = job.end; }
+  else { s = Math.floor(origin / W); en = s + 7; }
+  job.cranes.push({ id: nid(), name: item.value, type: item.label, start: s, end: en });
+  if (job.start == null) { job.start = s; job.end = en; }
+  save(); render(); flashJob(job.id);
+  log(`${item.value} (${item.label}) -> ${job.ship}: ${rangeLabel(s, en)}`);
+  // this is where you'd call your real update (fetch/Blazor interop/etc.)
+});
+
+render();
+
+/* ---------- crane palette (works in either kind of pop-out) ---------- */
+function buildPalette(doc) {
+  const root = doc.createElement('div');
+  root.className = 'palette';
+  for (const t of CRANE_TYPES) {
+    const g = doc.createElement('div');
+    g.className = 'group';
+    const h = doc.createElement('h2');
+    h.textContent = t.type;
+    g.append(h);
+    for (const [name, color] of t.cranes) {
+      const chip = doc.createElement('div');
+      chip.className = 'chip';
+      chip.draggable = true;
+      chip.innerHTML = `<span class="sw" style="background:${color}"></span><span class="val">${esc(name)}</span>`;
+      chip.addEventListener('dragstart', e => {
+        e.dataTransfer.setData(MIME, JSON.stringify({ kind: 'crane', value: name, label: t.type }));
+        e.dataTransfer.setData('text/plain', name); // fallback for other apps
+        e.dataTransfer.effectAllowed = 'copy';
+      });
+      g.append(chip);
+    }
+    root.append(g);
+  }
+  const note = doc.createElement('p');
+  note.className = 'note';
+  note.textContent = 'Drag any crane onto a ship job.';
+  root.append(note);
+  return root;
+}
+
+function copyStyles(toDoc) {
+  // inline <style> blocks and linked sheets both get carried over
+  document.querySelectorAll('style, link[rel="stylesheet"]').forEach(n => toDoc.head.append(n.cloneNode(true)));
+}
+
+/* ---------- option 1: Document Picture-in-Picture (always on top) ---------- */
+const pipBtn = document.getElementById('openPip');
+let pipWin = null;
+
+if (!('documentPictureInPicture' in window)) {
+  pipBtn.disabled = true;
+  pipBtn.title = 'Needs Chrome or Edge 116+ (Document Picture-in-Picture)';
+}
+
+pipBtn.addEventListener('click', async () => {
+  if (pipWin && !pipWin.closed) { pipWin.focus(); return; }
+  pipWin = await documentPictureInPicture.requestWindow({ width: 280, height: 720 });
+  copyStyles(pipWin.document);
+  pipWin.document.body.append(buildPalette(pipWin.document));
+  pipWin.addEventListener('pagehide', () => { pipWin = null; log('crane list closed'); });
+  log('crane list opened (always on top)');
+});
+
+/* ---------- option 2: window.open fallback ---------- */
+const winBtn = document.getElementById('openWin');
+let popWin = null;
+
+winBtn.addEventListener('click', () => {
+  if (popWin && !popWin.closed) { popWin.focus(); return; }
+  popWin = window.open('', 'palette', 'popup=yes,width=300,height=760');
+  const d = popWin.document;
+  d.open();
+  d.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>Cranes</title></head><body></body></html>');
+  d.close();
+  copyStyles(d);
+  d.body.append(buildPalette(d));
+  log('crane list opened in a normal window (browsers do not let these stay on top)');
+});
+</script>
+</body>
+</html>
